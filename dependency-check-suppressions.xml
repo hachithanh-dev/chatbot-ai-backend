@@ -93,20 +93,35 @@
         <notes><![CDATA[
             Transitive from Spring Boot BOM. OAuth2 resource server CVE
             managed upstream. Mitigation: custom JWT filter + token blacklist.
-            Reviewed: 2026-04-25
+            Reviewed: 2026-05-01
         ]]></notes>
         <gav regex="true">org\.springframework\.boot:spring-boot.*:.*</gav>
         <cve>CVE-2026-22731</cve>
         <cve>CVE-2026-22733</cve>
+        <cve>CVE-2026-40972</cve>
+        <cve>CVE-2026-40975</cve>
+        <cve>CVE-2026-40973</cve>
+        <cve>CVE-2026-40977</cve>
     </suppress>
 
     <suppress>
         <notes><![CDATA[
             Transitive from Spring Boot BOM. Spring Framework core CVEs
             managed upstream. Cannot upgrade independently.
-            Reviewed: 2026-04-25
+            Reviewed: 2026-05-01
         ]]></notes>
         <gav regex="true">org\.springframework:spring-core:.*</gav>
+        <cve>CVE-2026-22737</cve>
+        <cve>CVE-2026-22735</cve>
+    </suppress>
+
+    <suppress>
+        <notes><![CDATA[
+            Transitive from Spring Boot BOM. Spring Framework spring-tx CVEs
+            — same CPE match as spring-core. Cannot upgrade independently.
+            Reviewed: 2026-05-01
+        ]]></notes>
+        <gav regex="true">org\.springframework:spring-tx:.*</gav>
         <cve>CVE-2026-22737</cve>
         <cve>CVE-2026-22735</cve>
     </suppress>
@@ -117,7 +132,7 @@
             These are in the AI model abstraction layer.
             Mitigations: input sanitization, rate limiting, mock in non-prod.
             Will be resolved when Spring AI releases patch.
-            Reviewed: 2026-04-18
+            Reviewed: 2026-05-01
         ]]></notes>
         <gav regex="true">org\.springframework\.ai:spring-ai-.*:.*</gav>
         <cve>CVE-2026-22738</cve>
@@ -126,6 +141,11 @@
         <cve>CVE-2026-22742</cve>
         <cve>CVE-2026-22743</cve>
         <cve>CVE-2026-22744</cve>
+        <cve>CVE-2026-40978</cve>
+        <cve>CVE-2026-40967</cve>
+        <cve>CVE-2026-40980</cve>
+        <cve>CVE-2026-40979</cve>
+        <cve>CVE-2026-40966</cve>
     </suppress>
 
     <suppress>
