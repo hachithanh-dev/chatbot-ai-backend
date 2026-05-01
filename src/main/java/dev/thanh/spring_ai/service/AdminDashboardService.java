@@ -40,19 +40,50 @@ public class AdminDashboardService {
     @Value("${crawler.default-target-chunks:1000}")
     private int defaultTargetChunks;
 
-    @Transactional(readOnly = true)
+    /**
+     * Aggregates dashboard stats from DB + Qdrant.
+     *
+     * <p><b>Connection optimization:</b> The Qdrant gRPC call (timeout 5s) is
+     * separated OUTSIDE the {@code @Transactional} scope. The DB connection is
+     * only held during {@link #queryDbStats()} (~2-5ms), then released back to
+     * the pool BEFORE calling Qdrant.</p>
+     *
+     * <p>Combined with {@code LazyConnectionDataSourceProxy}, the flow becomes:</p>
+     * <ol>
+     *   <li>{@code queryDbStats()} → acquire connection → execute 3 COUNT queries → release</li>
+     *   <li>{@code countQdrantVectors()} → gRPC call (NO DB connection held)</li>
+     *   <li>Build response from both results</li>
+     * </ol>
+     */
     public DashboardStatsResponse getStats() {
+        // Phase 1: DB queries — connection is only held within this scope
+        DbStats dbStats = queryDbStats();
+
+        // Phase 2: Qdrant gRPC — NO DB connection held
+        long qdrantVectors = countQdrantVectors();
+
+        // TODO: Default low relevance percent until calculation logic is implemented
+        double lowRelevancePercent = 5.0;
+
+        return new DashboardStatsResponse(
+                dbStats.activeDocs(),
+                qdrantVectors,
+                dbStats.pendingPages(),
+                dbStats.lastCrawlInfo(),
+                dbStats.todayQueries(),
+                lowRelevancePercent
+        );
+    }
+
+    /**
+     * Groups all DB queries into a single readOnly transaction.
+     * Connection is acquired (lazily) and released within the smallest scope.
+     */
+    @Transactional(readOnly = true)
+    DbStats queryDbStats() {
         long activeDocs = documentRepository.countByStatus(DocumentStatus.ACTIVE);
         long pendingPages = crawlerPageRepository.countByStatus(CrawlerPageStatus.PENDING);
         long todayQueries = messageRepository.countTodayUserMessages(LocalDate.now().atStartOfDay());
-
-        long qdrantVectors = 0L;
-        try {
-            qdrantVectors = qdrantClient.countAsync(collectionName)
-                    .get(5, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error("Failed to get Qdrant vector count", e);
-        }
 
         DashboardStatsResponse.LastCrawlInfo lastCrawlInfo = jobExecutionRepository
                 .findTopByJobIdOrderByStartedAtDesc("crawl-all")
@@ -62,18 +93,28 @@ public class AdminDashboardService {
                 ))
                 .orElse(null);
 
-        // TODO: Mặc định low relevance percent nếu chưa áp dụng logic tính
-        double lowRelevancePercent = 5.0;
-
-        return new DashboardStatsResponse(
-                activeDocs,
-                qdrantVectors,
-                pendingPages,
-                lastCrawlInfo,
-                todayQueries,
-                lowRelevancePercent
-        );
+        return new DbStats(activeDocs, pendingPages, todayQueries, lastCrawlInfo);
     }
+
+    private long countQdrantVectors() {
+        try {
+            return qdrantClient.countAsync(collectionName)
+                    .get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("Failed to get Qdrant vector count", e);
+            return 0L;
+        }
+    }
+
+    /**
+     * Internal record to aggregate DB query results for passing between methods.
+     */
+    record DbStats(
+            long activeDocs,
+            long pendingPages,
+            long todayQueries,
+            DashboardStatsResponse.LastCrawlInfo lastCrawlInfo
+    ) {}
 
     @Transactional(readOnly = true)
     public List<TopicCoverageDto> getTopicCoverage() {
@@ -83,8 +124,8 @@ public class AdminDashboardService {
             String topic = (String) row[0];
             int chunkCount = ((Number) row[1]).intValue();
             
-            // Topic thực tế thường lấy từ mapping, nếu không có lấy default
-            // Tạm thời set target là 500 nếu topic là "spring", "rag"
+            // Target chunks are typically retrieved from a mapping; fall back to default
+            // Temporarily set higher target for "spring" topics
             int targetChunks = topic != null && topic.contains("spring") ? 2000 : defaultTargetChunks;
             
             double coverage = Math.min(100.0, (chunkCount * 100.0) / targetChunks);

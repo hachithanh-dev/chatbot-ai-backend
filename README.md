@@ -57,8 +57,8 @@
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **Runtime** | Java 24 (Virtual Threads) | High-concurrency async processing |
-| **Framework** | Spring Boot 3.5 | Core framework |
-| **AI / LLM** | Spring AI 1.1 + Google Gemini 2.5 Flash | Chat streaming & embedding |
+| **Framework** | Spring Boot 3.5.8 | Core framework |
+| **AI / LLM** | Spring AI 1.1.0 + Google Gemini 2.5 Flash | Chat streaming & embedding |
 | **Embedding** | Gemini Embedding 001 (Matryoshka 768d) | Dual task-type embeddings (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY) |
 | **Vector DB** | Qdrant 1.13 | Semantic search & RAG retrieval |
 | **Reranking** | Cohere Rerank v3.5 | Cross-encoder reranking (improve RAG quality) |
@@ -76,6 +76,9 @@
 | **Load Testing** | k6 | Stress testing & concurrency benchmarks |
 | **ID Generation** | UUIDv7 (uuid-creator) | Time-ordered sortable unique IDs |
 | **Container** | Docker + Docker Compose (multi-env) | Infrastructure orchestration (Dev / Prod) |
+| **SAST** | SpotBugs + FindSecBugs + PMD + OWASP Dep-Check | Static analysis, CVE scanning (failOnCVSS ≥ 7) |
+| **CI/CD** | GitHub Actions (6-stage) + Trivy + SonarQube | Secret scan → Test → SAST → Quality Gate → Docker |
+| **DB Optimization** | LazyConnectionDataSourceProxy | Defer DB connection until first SQL (cache-hit optimization) |
 
 ---
 
@@ -84,7 +87,7 @@
 ### 🧠 Agentic RAG Pipeline
 
 - **Agentic approach**: LLM (Gemini) tự quyết định khi nào cần tra cứu knowledge base thông qua **Tool Calling** — thay vì naive RAG (mọi câu hỏi đều qua Qdrant)
-- **Semantic Cache layer**: Redis HNSW + MiniLM-L6-v2 local embedding (384-dim, ~1ms). Cache hit → ~10ms thay vì ~2-5s (skip Qdrant + Cohere hoàn toàn)
+- **Semantic Cache layer** (inside tool): Redis HNSW + MiniLM-L6-v2 local embedding (384-dim, ~1ms). Chỉ trigger khi LLM gọi tool → cache hit → ~10ms thay vì ~2-5s (skip Qdrant + Cohere hoàn toàn). Câu hỏi không cần tool → bypass cache hoàn toàn
 - **3-stage retrieval** (khi cache miss + tool được gọi): Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
 - **Event-driven cache invalidation**: Upload tài liệu mới → tự động evict toàn bộ semantic cache (FT.DROPINDEX DD + re-create)
 - **Tool resilience**: Timeout 10s + graceful fallback — nếu Qdrant down/chậm, LLM vẫn trả lời bằng general knowledge. Cache failure cũng fail-open
@@ -154,6 +157,12 @@
   - `llm.stream.ttfb` — Timer: Time To First Byte từ Gemini
   - `llm.stream.status` — Counter: stream success/error by type
 - **Resilience4j health indicators**: CB state, RL metrics, BH metrics exposed via Actuator
+- **Lettuce pool metrics** (via `LettucePoolMetricsConfig` — reflection-based extraction):
+  - `lettuce_pool_active` — Gauge: connections currently borrowed
+  - `lettuce_pool_idle` — Gauge: idle connections in pool
+  - `lettuce_pool_pending` — Gauge: threads waiting for connection (⚠️ if > 0)
+  - `lettuce_pool_max` — Gauge: max pool size
+  - `lettuce_pool_created_total` / `lettuce_pool_destroyed_total` — connection churn detection
 - **Prometheus exporters**: Redis Exporter + PostgreSQL Exporter
 - **Grafana dashboards**: Pre-configured datasource provisioning
 - **Structured logging**: Topic-based Slf4j loggers, client disconnect vs infrastructure error classification
@@ -272,11 +281,16 @@ curl http://localhost:8080/actuator/bulkheads
 | `GEMINI_API_KEY` | Google Gemini API key | `AIza...` |
 | `COHERE_API_KEY` | Cohere Rerank API key | `RO1M...` |
 | `GOOGLE_CLIENT_ID` | Google OAuth2 Client ID | `4841...apps.googleusercontent.com` |
-| `DB_HOST` | PostgreSQL host | `localhost` |
-| `DB_PORT` | PostgreSQL port | `5432` |
-| `DB_NAME` | Database name | `chatbot` |
-| `DB_USERNAME` | Database username | `postgres` |
-| `DB_PASSWORD` | Database password | `***` |
+| `NVD_API_KEY` | NVD API key (OWASP Dependency-Check) | `c27c...` |
+| `POSTGRES_USER` | PostgreSQL user (Docker init) | `postgres` |
+| `POSTGRES_PASSWORD` | PostgreSQL password (Docker init) | `***` |
+| `POSTGRES_DB` | PostgreSQL database (Docker init) | `chatbot` |
+| `POSTGRES_PORT` | PostgreSQL port (Docker init) | `5432` |
+| `DB_HOST` | PostgreSQL host (Spring app) | `localhost` |
+| `DB_PORT` | PostgreSQL port (Spring app) | `5432` |
+| `DB_NAME` | Database name (Spring app) | `chatbot` |
+| `DB_USERNAME` | Database username (Spring app) | `postgres` |
+| `DB_PASSWORD` | Database password (Spring app) | `***` |
 | `REDIS_HOST` | Redis host | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
 | `REDIS_PASSWORD` | Redis password | `***` |
@@ -286,6 +300,7 @@ curl http://localhost:8080/actuator/bulkheads
 | `CORS_ALLOWED_ORIGINS` | Allowed CORS origins | `https://yourdomain.com` |
 | `GF_ADMIN_USER` | Grafana admin username | `admin` |
 | `GF_ADMIN_PASSWORD` | Grafana admin password | `admin` |
+| `ADMIN_EMAILS` | Comma-separated admin emails (auto-seed on startup) | `admin@example.com` |
 
 ---
 
@@ -315,6 +330,13 @@ chatbot-ai-backend/
 │   │   ├── SemanticCacheProperties.java   # HNSW tuning + cache behavior config
 │   │   ├── CohereConfig.java             # Cohere Rerank client
 │   │   ├── VirtualThreadConfig.java       # Virtual thread executor
+│   │   ├── LazyDataSourceConfig.java      # Defer DB connection (BeanPostProcessor)
+│   │   ├── LettucePoolMetricsConfig.java  # Lettuce pool → Prometheus metrics
+│   │   ├── AdminSeeder.java              # Auto-seed admin users on startup
+│   │   ├── AdminProperties.java          # Admin email configuration
+│   │   ├── AsyncConfig.java              # Async executor configuration
+│   │   ├── SchedulerConfig.java          # Scheduler thread pool
+│   │   ├── RetryProperties.java          # Retry configuration
 │   │   └── ...
 │   ├── constants/                         # Application constants
 │   │   └── TokenConstants.java            # JWT token constants
@@ -338,10 +360,17 @@ chatbot-ai-backend/
 │   │   └── BaseEntity.java              # Audit fields (createdAt, updatedAt)
 │   ├── enums/                             # Enum types
 │   ├── event/                             # Application events
+│   │   ├── ChatMessageEvent.java          # Message event payload
+│   │   ├── SessionCreatedEvent.java       # Session creation event
+│   │   └── SessionEventListener.java      # Event listener (session → ZSET)
 │   ├── exception/                         # Global exception handling
 │   │   ├── GlobalExceptionHandler.java    # Central error handler (no stack trace leak)
 │   │   ├── RateLimitException.java        # 429 with Retry-After header
-│   │   └── ...
+│   │   ├── ServiceDegradedException.java  # 503 for CB/Bulkhead rejection
+│   │   ├── ResourceNotFoundException.java # 404
+│   │   ├── BadRequestException.java       # 400
+│   │   ├── SecurityAuthException.java     # Authentication errors
+│   │   └── SessionException.java          # Session-specific errors
 │   ├── repository/                        # Spring Data JPA repos
 │   │   ├── BatchMessageRepository.java    # Native SQL batch insert (ON CONFLICT)
 │   │   ├── BatchSessionRepository.java    # Batch session timestamp update
@@ -417,7 +446,7 @@ chatbot-ai-backend/
 │   └── README.md                          # Benchmark documentation
 ├── database/
 │   └── init_schema.sql                    # Reference schema
-├── Dockerfile                             # Multi-stage Docker build
+├── Dockerfile                             # Multi-stage Docker build (layered JAR)
 ├── docker-compose.yml                     # Base infrastructure (PG, Redis, Qdrant)
 ├── docker-compose.dev.yml                 # Dev override (ports exposed, IDE mode)
 ├── docker-compose.prod.yml                # Prod override (app + monitoring + tuned PG)
@@ -425,6 +454,9 @@ chatbot-ai-backend/
 ├── run-prod.bat                           # Windows: start prod environment
 ├── pom.xml                                # Maven dependencies
 ├── .env.example                           # Environment variable template
+├── .github/workflows/ci.yml               # CI pipeline (6-stage)
+├── scripts/                               # Helper scripts
+│   └── generate-test-keys.sh              # Generate ephemeral RSA keys for CI
 └── README.md
 ```
 
@@ -607,6 +639,139 @@ psql -f loadtest/seed-test-users.sql
 # Run stress test
 k6 run loadtest/stress-test-find-limit.js
 ```
+
+---
+
+## 🔄 CI/CD Pipeline
+
+Dự án sử dụng **GitHub Actions** với pipeline 6 stages:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        CI Pipeline — Spring AI Chatbot                     │
+├──────────┬─────────────────────────────────────────────────────────────────┤
+│ Stage 0  │ 🔒 Secret Scanning (TruffleHog — block if credentials leaked)  │
+├──────────┼─────────────────────────────────────────────────────────────────┤
+│ Stage 1  │ 🧪 Unit Tests (JUnit 5, parallel, JaCoCo coverage)             │
+├──────────┼─────────────────────────────────────────────────────────────────┤
+│ Stage 2  │ 🔗 Integration Tests (Testcontainers: PostgreSQL + Redis)      │
+├──────────┼─────────────────────────────────────────────────────────────────┤
+│ Stage 3  │ 🔍 SAST — parallel:                                            │
+│          │   • SpotBugs + FindSecBugs (static code analysis)              │
+│          │   • PMD (code quality rules)                                    │
+│          │   • OWASP Dependency-Check (CVE scan, failOnCVSS ≥ 7)          │
+├──────────┼─────────────────────────────────────────────────────────────────┤
+│ Stage 4  │ 📊 SonarQube Quality Gate (coverage + code smells)             │
+├──────────┼─────────────────────────────────────────────────────────────────┤
+│ Stage 5  │ 🐳 Docker Build + Trivy Scan (PR: local only / Push: push)     │
+└──────────┴─────────────────────────────────────────────────────────────────┘
+```
+
+**PR workflow**: Stage 0 → 1 → 2 + 3 (parallel) → 4 → 5 (build + scan, no push)
+**Merge to main**: Stage 0 → 6 (rebuild + Trivy scan + Docker Hub push)
+
+### CI Secrets Required
+
+| Secret | Purpose |
+|--------|---------|
+| `NVD_API_KEY` | OWASP Dependency-Check NVD database |
+| `SONAR_TOKEN` | SonarQube authentication |
+| `SONAR_HOST_URL` | SonarQube server URL |
+| `DOCKER_USERNAME` | Docker Hub registry login |
+| `DOCKER_PASSWORD` | Docker Hub registry password |
+
+---
+
+## 🏗️ Design Patterns Applied
+
+| Pattern | Implementation |
+|---------|----------------|
+| **Circuit Breaker** | `SafeRedisExecutor` (Redis), `LlmService` (Gemini) — Resilience4j |
+| **Bulkhead** | DB fallback isolation (HikariCP protection), LLM concurrent limit |
+| **4-Tier Priority Strategy** | CRITICAL → DB fallback, NON-CRITICAL → reject 503, FIRE-AND-FORGET → skip, FAIL-OPEN → return null |
+| **Event-Driven (Producer-Consumer)** | Redis Streams Consumer Group → batch insert PostgreSQL |
+| **Dead Letter Queue** | Failed messages → `chat:messages:dlq` → manual investigation |
+| **Token Bucket (Lua atomic)** | Redis Lua script — atomic refill + consume, zero race conditions |
+| **Cache-Aside + Write-Behind** | Session ZSET (fast reads) + dirty tracking ZSET → background scheduler batch sync to DB |
+| **Port/Adapter** | `LlmServicePort`, `RagServicePort` → mock injection for load testing |
+| **Lazy Initialization** | `LazyConnectionDataSourceProxy` — defer DB connection until first SQL (saves pool for cache-hit paths) |
+| **BeanPostProcessor** | Wrap HikariDataSource transparently without overriding auto-config |
+| **Agentic Tool Calling** | LLM decides when to invoke RAG search via function calling (vs naive "always search") |
+| **Dual Embedding** | Separate `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task-type embeddings for optimal retrieval |
+
+---
+
+## 🔄 Chat Request Data Flow
+
+```
+Client (SSE Request)
+  │
+  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Rate Limit Check                                              │
+│    ├── Token Bucket (Lua) → anti-spam                           │
+│    └── Daily Quota (pre-flight GET only, no increment)          │
+├─────────────────────────────────────────────────────────────────┤
+│ 2. Gemini LLM Stream (SSE)                                      │
+│    └── LLM tự quyết định: cần tra cứu knowledge base?          │
+│        │                                                         │
+│        ├── KHÔNG cần tool → LLM trả lời bằng general knowledge  │
+│        │                                                         │
+│        └── CẦN tool → gọi searchJavaSpringBootDocs()            │
+│            │                                                     │
+│            ├── 2a. Semantic Cache Lookup (inside tool)           │
+│            │   ├── MiniLM-L6-v2 embed query (~1ms)              │
+│            │   └── Redis HNSW FT.SEARCH                         │
+│            │       ├── HIT → return cached (~10ms) ← skip RAG  │
+│            │       └── MISS → continue ▼                        │
+│            │                                                     │
+│            ├── 2b. Full RAG Pipeline                             │
+│            │   ├── Qdrant Vector Search (top-K candidates)      │
+│            │   └── Cohere Rerank (cross-encoder, top-N)         │
+│            │                                                     │
+│            └── 2c. Cache Store (fire-and-forget)                │
+│                └── Embed & index result → Redis HNSW            │
+├─────────────────────────────────────────────────────────────────┤
+│ 3. Async Post-Processing (fire-and-forget on virtual threads)   │
+│    ├── Redis Stream XADD (user + assistant messages)            │
+│    ├── ZSET touch session activity                               │
+│    ├── Daily Quota consume (actual tokens from Gemini metadata) │
+│    └── History cache update (LRU 20 messages)                   │
+├─────────────────────────────────────────────────────────────────┤
+│ 4. Background Workers (scheduled)                                │
+│    ├── Stream Consumer Group → batch INSERT PostgreSQL           │
+│    ├── Session Sync Scheduler → ZPOPMIN dirty → batch UPDATE DB │
+│    └── Pending Recovery → XCLAIM stale messages → retry          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+> **Lưu ý**: Semantic Cache nằm **bên trong tool** (`JavaKnowledgeTools`), KHÔNG phải bước riêng trước LLM.
+> Nếu câu hỏi không cần tool (casual, non-Java), LLM trả lời trực tiếp — hoàn toàn bypass RAG + cache.
+
+---
+
+## ⚡ Performance Benchmarks
+
+> Đầy đủ chi tiết xem tại [`benchmark/README.md`](benchmark/README.md)
+
+| Metric | Value | Condition |
+|--------|-------|-----------|
+| **Throughput** | ~390 rps | 2,000 VU, Mock LLM |
+| **Latency p50** | 2.09s | Mock LLM (TTFB 300-2000ms) |
+| **Semantic Cache hit** | ~10ms | vs ~2-5s full RAG pipeline |
+| **Local embedding** | ~1ms | MiniLM-L6-v2 ONNX, 384-dim |
+| **Saturation point** | ~2,800 VU | k6 tách máy, single instance |
+| **Capacity estimate** | ~10,000 users online | single instance, think-time 60s |
+| **System CPU** | 78.3% | @ 2,000 VU (k6 tách máy) |
+| **HikariCP pending** | 0 | with Bulkhead protection |
+| **CB state** | CLOSED ✅ | @ 2,000 VU (k6 tách máy) |
+
+### Key Findings
+
+- **Bulkhead** bảo vệ DB pool hoàn hảo: HikariCP pending = 0, timeout = 0
+- **4-Tier Priority** hoạt động đúng: 0 message loss, non-critical rejected gracefully
+- **k6 cùng máy** tranh ~20% CPU → tách ra tăng capacity **+55%**
+- **Recovery tự động** ~30s khi load giảm (CB HALF_OPEN → CLOSED)
 
 ---
 
