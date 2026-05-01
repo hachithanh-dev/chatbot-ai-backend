@@ -1,6 +1,11 @@
 # Profile: integration — used by @SpringBootTest with Testcontainers
 # Datasource, Redis URLs are auto-overridden by Testcontainers @DynamicPropertySource
 spring:
+  # ── HikariCP — must match LazyConnectionDataSourceProxy config ──────
+  datasource:
+    hikari:
+      auto-commit: false   # CRITICAL: LazyConnectionDataSourceProxy assumes autoCommit=false
+
   flyway:
     enabled: false
   jpa:
