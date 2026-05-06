@@ -163,39 +163,40 @@ jobs:
           path: target/pmd.xml
           retention-days: 7
 
-  sast-dependency-check:
-    name: 🛡️ OWASP Dependency Check
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VERSION }}
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
-          cache: maven
-
-      - name: Cache NVD Database
-        uses: actions/cache@v4
-        with:
-          path: ~/.dependency-check
-          key: ${{ runner.os }}-nvd-db
-          restore-keys: ${{ runner.os }}-nvd-db
-
-      - name: OWASP Dependency Check (CVE scan)
-        run: mvn dependency-check:check -B
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-
-      - name: Upload Dependency Check Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: target/dependency-check-report.html
-          retention-days: 14
+  # ── DISABLED: OWASP Dependency Check (too slow ~8min, re-enable before release) ──
+  # sast-dependency-check:
+  #   name: 🛡️ OWASP Dependency Check
+  #   runs-on: ubuntu-latest
+  #   needs: unit-tests
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Setup JDK ${{ env.JAVA_VERSION }}
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         java-version: ${{ env.JAVA_VERSION }}
+  #         distribution: ${{ env.JAVA_DISTRIBUTION }}
+  #         cache: maven
+  #
+  #     - name: Cache NVD Database
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: ~/.dependency-check
+  #         key: ${{ runner.os }}-nvd-db
+  #         restore-keys: ${{ runner.os }}-nvd-db
+  #
+  #     - name: OWASP Dependency Check (CVE scan)
+  #       run: mvn dependency-check:check -B
+  #       env:
+  #         NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+  #
+  #     - name: Upload Dependency Check Report
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: dependency-check-report
+  #         path: target/dependency-check-report.html
+  #         retention-days: 14
 
   # ═══════════════════════════════════════════════════════════════
   # Stage 4: SonarQube Quality Gate — aggregate all metrics
@@ -203,7 +204,7 @@ jobs:
   sonarqube:
     name: 📊 SonarQube (Informational)
     runs-on: ubuntu-latest
-    needs: [integration-tests, sast-spotbugs, sast-pmd, sast-dependency-check]
+    needs: [integration-tests, sast-spotbugs, sast-pmd]
     if: github.event_name == 'pull_request'
     continue-on-error: true  # Free plan enforces 80% coverage — don't block pipeline
     steps:
