@@ -54,6 +54,11 @@ build/
 .DS_Store
 Thumbs.db
 
+### ML / ONNX Model Files (too large for Git — download separately) ###
+*.onnx
+src/main/resources/models/
+/models/
+
 ### Spring Boot ###
 HELP.md
 k6.exe

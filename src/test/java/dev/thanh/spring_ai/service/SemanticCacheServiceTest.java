@@ -2,7 +2,7 @@ package dev.thanh.spring_ai.service;
 
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.thanh.spring_ai.config.SemanticCacheProperties;
 import io.micrometer.core.instrument.Counter;
@@ -40,7 +40,7 @@ import static org.mockito.Mockito.*;
 class SemanticCacheServiceTest {
 
     @Mock private JedisPooled jedis;
-    @Mock private AllMiniLmL6V2QuantizedEmbeddingModel localEmbeddingModel;
+    @Mock private EmbeddingModel cacheEmbeddingModel;
     @Mock private SemanticCacheProperties props;
 
     private MeterRegistry meterRegistry;
@@ -49,14 +49,14 @@ class SemanticCacheServiceTest {
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
-        service = new SemanticCacheService(jedis, localEmbeddingModel, props, meterRegistry);
+        service = new SemanticCacheService(jedis, cacheEmbeddingModel, props, meterRegistry);
     }
 
     private void stubEmbedding() {
         float[] fakeVector = new float[384];
         fakeVector[0] = 0.5f;
         Embedding embedding = Embedding.from(fakeVector);
-        lenient().when(localEmbeddingModel.embed(anyString()))
+        lenient().when(cacheEmbeddingModel.embed(anyString()))
                 .thenReturn(new Response<>(embedding));
     }
 

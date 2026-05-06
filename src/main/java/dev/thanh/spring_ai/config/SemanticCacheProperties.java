@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>
  * Semantic cache so sánh query mới với các query đã cache bằng cosine similarity
- * trên embedding vector 384-dim (MiniLM-L6-v2 quantized, chạy local).
+ * trên embedding vector 384-dim (multilingual-e5-small, chạy local ONNX).
  *
  * <p>
  * Khi cache hit (similarity ≥ threshold), kết quả RAG được trả ngay từ Redis
@@ -39,7 +39,7 @@ public class SemanticCacheProperties {
     /** Redis key prefix cho cache entries. */
     private String keyPrefix = "scache:";
 
-    /** Embedding dimension (MiniLM-L6-v2 = 384). */
+    /** Embedding dimension (multilingual-e5-small = 384). */
     private int embeddingDimension = 384;
 
     // ─── HNSW Tuning ────────────────────────────────────────────────────

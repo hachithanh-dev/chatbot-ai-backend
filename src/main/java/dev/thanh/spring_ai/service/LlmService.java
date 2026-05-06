@@ -14,13 +14,14 @@ import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOper
 import io.github.resilience4j.reactor.ratelimiter.operator.RateLimiterOperator;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import dev.thanh.spring_ai.tools.JavaKnowledgeTools;
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatResponse;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.core.io.Resource;
@@ -33,6 +34,7 @@ import reactor.util.retry.Retry;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeoutException;
@@ -56,11 +58,11 @@ public class LlmService implements LlmServicePort {
     }
 
     private final ChatClient chatClient;
+    private final ChatClient cheapChatClient;
     private final CircuitBreaker circuitBreaker;
     private final RateLimiter rateLimiter;
     private final Bulkhead bulkhead;
     private final MeterRegistry meterRegistry;
-    private final JavaKnowledgeTools knowledgeTool;
     private final RateLimitService rateLimitService;
     private final Executor virtualThreadExecutor;
 
@@ -68,22 +70,23 @@ public class LlmService implements LlmServicePort {
     private Resource agenticSystemPrompt;
 
     public LlmService(ChatClient chatClient,
+            @Qualifier("cheapChatClient") ChatClient cheapChatClient,
             CircuitBreakerRegistry circuitBreakerRegistry,
             RateLimiterRegistry rateLimiterRegistry,
             BulkheadRegistry bulkheadRegistry,
             MeterRegistry meterRegistry,
-            JavaKnowledgeTools knowledgeTool,
             RateLimitService rateLimitService,
             Executor virtualThreadExecutor) {
         this.chatClient = chatClient;
+        this.cheapChatClient = cheapChatClient;
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_NAME);
         this.rateLimiter = rateLimiterRegistry.rateLimiter(RESILIENCE_NAME);
         this.bulkhead = bulkheadRegistry.bulkhead(RESILIENCE_NAME);
         this.meterRegistry = meterRegistry;
-        this.knowledgeTool = knowledgeTool;
         this.rateLimitService = rateLimitService;
         this.virtualThreadExecutor = virtualThreadExecutor;
-        log.info("LlmService initialized — Agentic RAG mode | CB: {}, RL: limitForPeriod={}, BH: maxConcurrent={}",
+        log.info(
+                "LlmService initialized — Agentic RAG + Memory mode | CB: {}, RL: limitForPeriod={}, BH: maxConcurrent={}",
                 RESILIENCE_NAME,
                 rateLimiter.getRateLimiterConfig().getLimitForPeriod(),
                 bulkhead.getBulkheadConfig().getMaxConcurrentCalls());
@@ -106,20 +109,24 @@ public class LlmService implements LlmServicePort {
         AtomicInteger actualTotalTokens = new AtomicInteger(0);
 
         // Đo TTFB (Time To First Byte) — từ lúc gọi method → token đầu tiên
-        // Bao gồm thời gian xếp hàng RL/BH + tool execution → phản ánh TTFB thực từ góc user
+        // Bao gồm thời gian xếp hàng RL/BH + tool execution → phản ánh TTFB thực từ góc
+        // user
         Timer.Sample ttfbTimer = Timer.start(meterRegistry);
 
         return chatClient.prompt()
                 .system(agenticSystemPrompt)
                 .messages(history)
                 .user(userMsg)
-                .tools(knowledgeTool) // Agentic RAG — Gemini tự quyết định khi nào gọi tool
+                .toolContext(Map.of("userId", userId)) // Truyền userId cho MemoryTools (ToolContext)
+                .advisors(spec -> spec.param("userId", userId)) // Truyền userId cho Advisors
+                                                                // (ChatClientRequest.context)
                 .stream()
                 .chatResponse() // Dùng chatResponse() thay vì content() để capture usage metadata
-                .doOnSubscribe(s -> log.info("Gemini stream subscribed (tools: JavaKnowledgeTools)"))
+                .doOnSubscribe(s -> log.info("Gemini stream subscribed (tools: augmented via AiConfig)"))
 
                 // ── Capture usage metadata + đánh dấu TTFB ──
-                .doOnNext(response -> processStreamResponseMetadata(response, actualTotalTokens, hasEmittedData, ttfbStopped, ttfbTimer))
+                .doOnNext(response -> processStreamResponseMetadata(response, actualTotalTokens, hasEmittedData,
+                        ttfbStopped, ttfbTimer))
 
                 // ── Map ChatResponse → String (giữ nguyên contract Flux<String>) ──
                 .map(this::extractContent)
@@ -137,8 +144,8 @@ public class LlmService implements LlmServicePort {
                 // Thứ tự subscribe (ngoài → trong): RL → BH → CB → stream
                 // CB trong cùng → chỉ đếm failure từ Gemini, KHÔNG bị RL/BH rejection nhiễu
                 .transformDeferred(CircuitBreakerOperator.of(circuitBreaker)) // Trong: failure detection
-                .transformDeferred(BulkheadOperator.of(bulkhead))             // Giữa: concurrent limit
-                .transformDeferred(RateLimiterOperator.of(rateLimiter))        // Ngoài: RPM throttle
+                .transformDeferred(BulkheadOperator.of(bulkhead)) // Giữa: concurrent limit
+                .transformDeferred(RateLimiterOperator.of(rateLimiter)) // Ngoài: RPM throttle
 
                 // ── RETRY: ngoài RL — mỗi attempt đi lại qua RL→BH→CB ──
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(500))
@@ -172,7 +179,7 @@ public class LlmService implements LlmServicePort {
                 Language must match the user message.
                 Message: %s
                 """.formatted(userMsg);
-        return Mono.fromCallable(() -> chatClient.prompt()
+        return Mono.fromCallable(() -> cheapChatClient.prompt()
                 .user(titlePrompt)
                 .call()
                 .content())
@@ -296,9 +303,9 @@ public class LlmService implements LlmServicePort {
         return Flux.just("Xin lỗi, hệ thống AI gặp sự cố. Vui lòng thử lại sau.");
     }
 
-    private void processStreamResponseMetadata(ChatResponse response, AtomicInteger actualTotalTokens, 
-                                               AtomicBoolean hasEmittedData, AtomicBoolean ttfbStopped, 
-                                               Timer.Sample ttfbTimer) {
+    private void processStreamResponseMetadata(ChatResponse response, AtomicInteger actualTotalTokens,
+            AtomicBoolean hasEmittedData, AtomicBoolean ttfbStopped,
+            Timer.Sample ttfbTimer) {
         if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
             Integer total = response.getMetadata().getUsage().getTotalTokens();
             if (total != null && total > 0) {
@@ -315,8 +322,8 @@ public class LlmService implements LlmServicePort {
         }
     }
 
-    private void handleStreamFinally(AtomicInteger actualTotalTokens, String userId, 
-                                     AtomicBoolean ttfbStopped, Timer.Sample ttfbTimer) {
+    private void handleStreamFinally(AtomicInteger actualTotalTokens, String userId,
+            AtomicBoolean ttfbStopped, Timer.Sample ttfbTimer) {
         int totalTokens = actualTotalTokens.get();
         if (totalTokens > 0) {
             CompletableFuture.runAsync(() -> {

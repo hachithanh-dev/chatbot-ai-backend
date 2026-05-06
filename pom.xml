@@ -28,7 +28,7 @@
 	</scm>
 	<properties>
 		<java.version>24</java.version>
-		<spring-ai.version>1.1.0</spring-ai.version>
+		<spring-ai.version>1.1.4</spring-ai.version>
 		<!-- SonarQube Properties -->
 		<sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
 		<sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
@@ -66,11 +66,11 @@
 			<version>1.0.0</version>
 		</dependency>
 
-		<!-- Local Embedding Model — all-MiniLM-L6-v2 quantized (384-dim) -->
-		<!-- Chạy local, KHÔNG gọi API. Dùng cho semantic cache. -->
+		<!-- Local Embedding Model — multilingual-e5-small (384-dim, ONNX) -->
+		<!-- Custom ONNX model: 100+ languages, asymmetric retrieval (query:/passage:) -->
 		<dependency>
 			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-embeddings-all-minilm-l6-v2-q</artifactId>
+			<artifactId>langchain4j-embeddings</artifactId>
 			<version>1.12.2-beta22</version>
 		</dependency>
 
@@ -122,7 +122,6 @@
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-google-genai</artifactId>
-			<version>1.1.0</version>
 			<exclusions>
 				<exclusion>
 					<groupId>commons-logging</groupId>
@@ -300,6 +299,12 @@
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
+			<!-- Pin ONNX Runtime — tránh conflict giữa langchain4j và Spring AI -->
+			<dependency>
+				<groupId>com.microsoft.onnxruntime</groupId>
+				<artifactId>onnxruntime</artifactId>
+				<version>1.19.2</version>
+			</dependency>
 			<!-- Testcontainers BOM -->
 			<dependency>
 				<groupId>org.testcontainers</groupId>
@@ -336,10 +341,22 @@
 
 	<build>
 		<plugins>
+			<!-- Chặn Maven resource filtering đụng vào file .onnx (binary) -->
+			<!-- Nếu thiếu: Maven coi .onnx là text → corrupt file → Invalid Protobuf lúc load -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<configuration>
+					<nonFilteredFileExtensions>
+						<nonFilteredFileExtension>onnx</nonFilteredFileExtension>
+					</nonFilteredFileExtensions>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
+					<parameters>true</parameters>
 					<annotationProcessorPaths>
 						<path>
 							<groupId>org.projectlombok</groupId>

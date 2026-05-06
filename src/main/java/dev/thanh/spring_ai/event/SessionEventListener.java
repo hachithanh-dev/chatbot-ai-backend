@@ -27,13 +27,19 @@ public class SessionEventListener {
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleSessionCreated(SessionCreatedEvent event) {
-        if (event.getSession() == null || event.getSession().getId() == null) {
-            log.warn("Session or Session ID is null in SessionCreatedEvent");
+        var session = event.getSession();
+        if (session == null) {
+            log.warn("Session is null in SessionCreatedEvent");
             return;
         }
-        String sessionId = event.getSession().getId().toString();
+        var id = session.getId();
+        if (id == null) {
+            log.warn("Session ID is null in SessionCreatedEvent");
+            return;
+        }
+        String sessionId = id.toString();
         sessionCacheService.cacheSessionId(sessionId);
         log.info("Session [{}] cached after DB commit for user [{}]",
-                sessionId, event.getSession().getUserId());
+                sessionId, session.getUserId());
     }
 }

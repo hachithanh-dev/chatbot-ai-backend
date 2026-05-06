@@ -76,28 +76,23 @@ public class LettucePoolMetricsConfig {
      */
     @EventListener(ApplicationReadyEvent.class)
     public void registerMetrics() {
-        try {
-            // Step 1: Force pool initialization bằng cách tạo + trả connection
-            // Pool chỉ tồn tại SAU KHI connection đầu tiên được borrow
-            forcePoolInitialization();
+        // Step 1: Force pool initialization bằng cách tạo + trả connection
+        // Pool chỉ tồn tại SAU KHI connection đầu tiên được borrow
+        forcePoolInitialization();
 
-            // Step 2: Extract GenericObjectPool qua reflection
-            GenericObjectPool<?> pool = extractPool();
+        // Step 2: Extract GenericObjectPool qua reflection
+        GenericObjectPool<?> pool = extractPool();
 
-            if (pool == null) {
-                log.warn(
-                        "⚠️ Cannot extract GenericObjectPool from LettuceConnectionFactory — Lettuce pool metrics unavailable");
-                return;
-            }
-
-            // Step 3: Register tất cả Gauge metrics
-            registerPoolMetrics(pool);
-            log.info("✅ Lettuce pool metrics registered: lettuce_pool_active={}, lettuce_pool_idle={}, max={}",
-                    pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal());
-
-        } catch (Exception e) {
-            log.warn("⚠️ Failed to register Lettuce pool metrics: {}", e.getMessage());
+        if (pool == null) {
+            log.warn(
+                    "⚠️ Cannot extract GenericObjectPool from LettuceConnectionFactory — Lettuce pool metrics unavailable");
+            return;
         }
+
+        // Step 3: Register tất cả Gauge metrics
+        registerPoolMetrics(pool);
+        log.info("✅ Lettuce pool metrics registered: lettuce_pool_active={}, lettuce_pool_idle={}, max={}",
+                pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal());
     }
 
     /**

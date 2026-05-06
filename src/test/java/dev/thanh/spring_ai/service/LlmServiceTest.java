@@ -1,6 +1,5 @@
 package dev.thanh.spring_ai.service;
 
-import dev.thanh.spring_ai.tools.JavaKnowledgeTools;
 
 import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.bulkhead.BulkheadRegistry;
@@ -34,6 +33,7 @@ import java.net.ConnectException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
@@ -60,6 +60,9 @@ class LlmServiceTest {
     private ChatClient chatClient;
 
     @Mock
+    private ChatClient cheapChatClient;
+
+    @Mock
     private RateLimitService rateLimitService;
 
     // Default registry (used by most tests — CB always CLOSED)
@@ -75,9 +78,6 @@ class LlmServiceTest {
     private Executor virtualThreadExecutor;
 
     private LlmService llmService;
-
-    @Mock
-    private JavaKnowledgeTools knowledgeTool;
 
     private static final String USER_ID = "test-user-123";
 
@@ -99,8 +99,8 @@ class LlmServiceTest {
                         .build()
         );
         // Use default registry by default — tests needing CB OPEN will override
-        llmService = new LlmService(chatClient, defaultRegistry, rateLimiterRegistry,
-                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+        llmService = new LlmService(chatClient, cheapChatClient, defaultRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -134,15 +134,17 @@ class LlmServiceTest {
         ChatClient.ChatClientRequestSpec systemSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec messagesSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
-        ChatClient.ChatClientRequestSpec toolsSpec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.ChatClientRequestSpec toolContextSpec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.ChatClientRequestSpec advisorsSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.StreamResponseSpec streamSpec = mock(ChatClient.StreamResponseSpec.class);
 
         when(chatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.system((org.springframework.core.io.Resource) any())).thenReturn(systemSpec);
         when(systemSpec.messages(any(List.class))).thenReturn(messagesSpec);
         when(messagesSpec.user(anyString())).thenReturn(userSpec);
-        when(userSpec.tools(any())).thenReturn(toolsSpec);
-        when(toolsSpec.stream()).thenReturn(streamSpec);
+        when(userSpec.toolContext(any(Map.class))).thenReturn(toolContextSpec);
+        when(toolContextSpec.advisors(any(java.util.function.Consumer.class))).thenReturn(advisorsSpec);
+        when(advisorsSpec.stream()).thenReturn(streamSpec);
         when(streamSpec.chatResponse()).thenReturn(flux);
     }
 
@@ -231,8 +233,8 @@ class LlmServiceTest {
     @DisplayName("streamResponse — when CB is OPEN — should fail-fast with unavailable message (no 60s wait)")
     void streamResponse_WhenCircuitBreakerOpen_ShouldFailFast() {
         // Given: use sensitive registry, force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
-                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, cheapChatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // Manually transition to OPEN
@@ -251,8 +253,8 @@ class LlmServiceTest {
     @DisplayName("streamResponse — after enough failures — CB should OPEN and subsequent calls fail-fast")
     void streamResponse_AfterFailures_CircuitShouldOpen_AndSubsequentCallsFailFast() {
         // Given: sensitive registry (1 failure = OPEN)
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
-                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, cheapChatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
 
         // First call: mock Gemini error — this triggers CB to OPEN (1 failure = 100% rate)
@@ -274,8 +276,8 @@ class LlmServiceTest {
     @DisplayName("generateTitle — when CB is OPEN — should return Mono.empty (silent fallback)")
     void generateTitle_WhenCircuitBreakerOpen_ShouldReturnEmpty() {
         // Given: force CB into OPEN state
-        LlmService serviceWithSensitiveCB = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
-                bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+        LlmService serviceWithSensitiveCB = new LlmService(chatClient, cheapChatClient, sensitiveRegistry, rateLimiterRegistry,
+                bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
         CircuitBreaker cb = sensitiveRegistry.circuitBreaker("llm-gemini");
         cb.transitionToOpenState();
 
@@ -296,7 +298,7 @@ class LlmServiceTest {
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
-        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(cheapChatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenReturn("  My First Chat  ");
@@ -315,7 +317,7 @@ class LlmServiceTest {
         ChatClient.ChatClientRequestSpec userSpec = mock(ChatClient.ChatClientRequestSpec.class);
         ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
 
-        when(chatClient.prompt()).thenReturn(requestSpec);
+        when(cheapChatClient.prompt()).thenReturn(requestSpec);
         when(requestSpec.user(anyString())).thenReturn(userSpec);
         when(userSpec.call()).thenReturn(callSpec);
         when(callSpec.content()).thenThrow(new RuntimeException("Gemini 429"));
@@ -501,8 +503,8 @@ class LlmServiceTest {
                             .timeoutDuration(Duration.ZERO) // fail immediately
                             .build()
             );
-            LlmService strictService = new LlmService(chatClient, defaultRegistry, strictRL,
-                    bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+            LlmService strictService = new LlmService(chatClient, cheapChatClient, defaultRegistry, strictRL,
+                    bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
 
             // Exhaust the single permit
             io.github.resilience4j.ratelimiter.RateLimiter rl = strictRL.rateLimiter("llm-gemini");
@@ -527,8 +529,8 @@ class LlmServiceTest {
         @Test
         @DisplayName("when CB OPEN — should return 'tạm thời không khả dụng'")
         void cbOpen_ShouldReturnUnavailableMessage() {
-            LlmService service = new LlmService(chatClient, sensitiveRegistry, rateLimiterRegistry,
-                    bulkheadRegistry, meterRegistry, knowledgeTool, rateLimitService, virtualThreadExecutor);
+            LlmService service = new LlmService(chatClient, cheapChatClient, sensitiveRegistry, rateLimiterRegistry,
+                    bulkheadRegistry, meterRegistry, rateLimitService, virtualThreadExecutor);
             sensitiveRegistry.circuitBreaker("llm-gemini").transitionToOpenState();
             mockChatResponseStream(Flux.never());
 
