@@ -1,12 +1,12 @@
 package dev.thanh.spring_ai.service;
 
 import dev.langchain4j.data.embedding.Embedding;
-import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.thanh.spring_ai.config.SemanticCacheProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -40,12 +40,11 @@ import java.util.*;
  * <b>Architecture:</b>
  * <ul>
  *   <li>Dùng {@link JedisPooled} riêng (KHÔNG ảnh hưởng Lettuce/Spring Data Redis)</li>
- *   <li>Embedding bằng MiniLM-L6-v2 quantized (384-dim, ~1ms, local ONNX)</li>
+ *   <li>Embedding bằng multilingual-e5-small (384-dim, ~2-3ms, local ONNX)</li>
  *   <li>Redis 8.x có RediSearch built-in — FT.CREATE / FT.SEARCH</li>
  * </ul>
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j(topic = "SEMANTIC-CACHE")
 @ConditionalOnProperty(name = "semantic-cache.enabled", havingValue = "true", matchIfMissing = true)
 public class SemanticCacheService {
@@ -60,9 +59,20 @@ public class SemanticCacheService {
     private static final String TAG_RESULT = "result";
 
     private final JedisPooled jedis;
-    private final AllMiniLmL6V2QuantizedEmbeddingModel localEmbeddingModel;
+    private final EmbeddingModel cacheEmbeddingModel;
     private final SemanticCacheProperties props;
     private final MeterRegistry meterRegistry;
+
+    public SemanticCacheService(
+            JedisPooled jedis,
+            @Qualifier("cacheEmbeddingModel") EmbeddingModel cacheEmbeddingModel,
+            SemanticCacheProperties props,
+            MeterRegistry meterRegistry) {
+        this.jedis = jedis;
+        this.cacheEmbeddingModel = cacheEmbeddingModel;
+        this.props = props;
+        this.meterRegistry = meterRegistry;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Index Initialization — ApplicationReadyEvent
@@ -288,12 +298,13 @@ public class SemanticCacheService {
 
     /**
      * Embed text thành float[] vector 384-dim.
-     * Chạy local trên ONNX Runtime — ~1ms, zero API cost.
+     * Chạy local trên ONNX Runtime — ~2-3ms, zero API cost.
+     * Prefix "query: " được tự động chèn bởi cacheEmbeddingModel wrapper.
      */
     private float[] embed(String text) {
         Timer.Sample timer = Timer.start(meterRegistry);
         try {
-            Embedding embedding = localEmbeddingModel.embed(text).content();
+            Embedding embedding = cacheEmbeddingModel.embed(text).content();
             return embedding.vector();
         } finally {
             timer.stop(meterRegistry.timer(METRIC_EMBED_LATENCY));

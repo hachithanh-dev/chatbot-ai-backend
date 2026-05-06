@@ -55,6 +55,7 @@ public class AdminDashboardService {
      *   <li>Build response from both results</li>
      * </ol>
      */
+    @Transactional(readOnly = true)
     public DashboardStatsResponse getStats() {
         // Phase 1: DB queries — connection is only held within this scope
         DbStats dbStats = queryDbStats();
@@ -79,8 +80,7 @@ public class AdminDashboardService {
      * Groups all DB queries into a single readOnly transaction.
      * Connection is acquired (lazily) and released within the smallest scope.
      */
-    @Transactional(readOnly = true)
-    DbStats queryDbStats() {
+    private DbStats queryDbStats() {
         long activeDocs = documentRepository.countByStatus(DocumentStatus.ACTIVE);
         long pendingPages = crawlerPageRepository.countByStatus(CrawlerPageStatus.PENDING);
         long todayQueries = messageRepository.countTodayUserMessages(LocalDate.now().atStartOfDay());
@@ -100,6 +100,10 @@ public class AdminDashboardService {
         try {
             return qdrantClient.countAsync(collectionName)
                     .get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("Qdrant vector count interrupted");
+            return 0L;
         } catch (Exception e) {
             log.error("Failed to get Qdrant vector count", e);
             return 0L;
@@ -121,8 +125,8 @@ public class AdminDashboardService {
         List<Object[]> rawSums = documentRepository.sumChunksByTopic();
 
         return rawSums.stream().map(row -> {
-            String topic = (String) row[0];
-            int chunkCount = ((Number) row[1]).intValue();
+            String topic = row[0] != null ? (String) row[0] : null;
+            int chunkCount = row[1] != null ? ((Number) row[1]).intValue() : 0;
             
             // Target chunks are typically retrieved from a mapping; fall back to default
             // Temporarily set higher target for "spring" topics
@@ -148,10 +152,10 @@ public class AdminDashboardService {
 
         return history.stream().map(row -> {
             // row[0] is Date or Timestamp based on dialect, cast appropriately
-            java.util.Date sqlDate = (java.util.Date) row[0];
+            java.util.Date sqlDate = row[0] != null ? (java.util.Date) row[0] : new java.util.Date();
             LocalDate date = new java.sql.Date(sqlDate.getTime()).toLocalDate();
-            int success = ((Number) row[1]).intValue();
-            int fail = ((Number) row[2]).intValue();
+            int success = row[1] != null ? ((Number) row[1]).intValue() : 0;
+            int fail = row[2] != null ? ((Number) row[2]).intValue() : 0;
 
             return new CrawlHistoryDto(date, success, fail);
         }).toList();

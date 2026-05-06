@@ -28,7 +28,16 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.*;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.ArrayList;
 import java.util.stream.Collectors;
 
 @Service
@@ -125,7 +134,7 @@ public class ChatSessionService {
         log.info("Renamed session {} to '{}' for user {}", sessionId, newTitle, userId);
 
         return SessionResponse.builder()
-                .id(newSession.getId().toString())
+                .id(Objects.requireNonNull(newSession.getId(), "Session ID is null").toString())
                 .title(newSession.getTitle())
                 .createdAt(newSession.getCreatedAt())
                 .updatedAt(newSession.getUpdatedAt())
@@ -140,20 +149,23 @@ public class ChatSessionService {
     public String getOrCreateSession(String sessionId, String userId) {
         // ── Case 1: Tạo session mới — chỉ INSERT cần transaction ──
         if (sessionId == null || sessionId.isEmpty()) {
-            Session saved = transactionTemplate.execute(status -> {
-                Session newSession = Session.builder()
-                        .id(uuidV7Generator.generate())
-                        .userId(UUID.fromString(userId))
-                        .title("New Chat")
-                        .active(true)
-                        .build();
-                return sessionRepository.save(newSession);
-            }); // ← Connection trả lại NGAY tại đây!
+            Session saved = Objects.requireNonNull(
+                    transactionTemplate.execute(status -> {
+                        Session newSession = Session.builder()
+                                .id(uuidV7Generator.generate())
+                                .userId(UUID.fromString(userId))
+                                .title("New Chat")
+                                .active(true)
+                                .build();
+                        return sessionRepository.save(newSession);
+                    }),
+                    "TransactionTemplate.execute() returned null — session insert failed"
+            ); // ← Connection trả lại NGAY tại đây!
 
             log.info("Created new session [{}] for user [{}]", saved.getId(), userId);
             // Event publish NGOÀI transaction — không giữ connection
             eventPublisher.publishEvent(new SessionCreatedEvent(this, saved));
-            return saved.getId().toString();
+            return Objects.requireNonNull(saved.getId(), "Saved session ID is null").toString();
         }
 
         // ── Case 2: Cache hit → trả về ngay, KHÔNG cần DB connection ──
@@ -223,7 +235,7 @@ public class ChatSessionService {
 
     private MessageDTO mapToMessageDTO(ChatMessage chatMessage) {
         return MessageDTO.builder()
-                .id(chatMessage.getId().toString())
+                .id(Objects.requireNonNull(chatMessage.getId(), "ChatMessage ID is null").toString())
                 .role(chatMessage.getRole())
                 .sessionId(chatMessage.getSessionId().toString())
                 .content(chatMessage.getContent())
@@ -384,7 +396,7 @@ public class ChatSessionService {
         Map<String, Double> scores = new LinkedHashMap<>();
         for (Session s : sessions) {
             double score = (double) s.getUpdatedAt().atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-            scores.put(s.getId().toString(), score);
+            scores.put(Objects.requireNonNull(s.getId(), "Session ID is null").toString(), score);
         }
         sessionActivityService.warmUpFromDb(userId, scores);
     }
@@ -449,7 +461,8 @@ public class ChatSessionService {
         String nextCursor = null;
         if (hasNext && !messages.isEmpty()) {
             ChatMessage lastMsg = messages.get(messages.size() - 1);
-            String rawCursor = lastMsg.getCreatedAt().toString() + "::" + lastMsg.getId().toString();
+            String rawCursor = Objects.requireNonNull(lastMsg.getCreatedAt(), "Message createdAt is null")
+                    + "::" + Objects.requireNonNull(lastMsg.getId(), "Message ID is null");
             nextCursor = Base64.getEncoder().encodeToString(rawCursor.getBytes(StandardCharsets.UTF_8));
         }
 

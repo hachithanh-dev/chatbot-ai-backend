@@ -84,7 +84,15 @@ server:
     mime-types: application/json,text/event-stream   # SSE streaming
     min-response-size: 512
 
-# ── RAG Pipeline ───────────────────────────────────────────────────────
+# ── Local Embedding — multilingual-e5-small (ONNX) ───────────────────
+# Dùng cho Semantic Cache + User Memory. 384-dim, 100+ languages.
+# Dev: load từ classpath. Prod: override bằng env var đường dẫn Docker volume.
+embedding:
+  local:
+    model-path: "classpath:models/multilingual-e5-small/model_quantized.onnx"
+    tokenizer-path: "classpath:models/multilingual-e5-small/tokenizer.json"
+
+# ── RAG Pipeline ─────────────────────────────────────────────────────────
 rag:
   chunk-size: 2048
   chunk-overlap: 256
@@ -94,6 +102,17 @@ rag:
   candidate-similarity-threshold: 0.6
   rerank-top-k: 3
   rerank-model: "rerank-v3.5"
+
+# ── Long-Term Memory — User memories per user in Qdrant ──────────────
+memory:
+  enabled: true
+  collection-name: user-memories
+  embedding-dimension: 384          # ONNX multilingual-e5-small (giống semantic cache)
+  similarity-threshold: 0.80        # E5 asymmetric + XLM-RoBERTa anisotropy → score cao hơn MiniLM
+  top-k: 3                          # Top 3 memories liên quan nhất
+  min-content-length: 5             # Skip "ok", "hi", "cảm ơn"
+  duplicate-threshold: 0.98          # score >= 0.98 → skip (chỉ touch timestamp)
+  update-threshold: 0.92             # score >= 0.92 → update content cùng ID
 
 # ── Semantic Cache — Redis HNSW + Local Embedding ────────────────────
 semantic-cache:
@@ -249,10 +268,11 @@ management:
   endpoint:
     health:
       show-details: always
-  metrics:
-    export:
-      prometheus:
+  prometheus:
+    metrics:
+      export:
         enabled: true
+  metrics:
     tags:
       application: spring-ai
     distribution:

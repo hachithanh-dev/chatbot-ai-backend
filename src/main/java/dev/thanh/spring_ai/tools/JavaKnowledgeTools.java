@@ -49,7 +49,7 @@ public class JavaKnowledgeTools {
      */
     private final Optional<SemanticCacheService> semanticCache;
 
-    @Tool(description = """
+    @Tool(name = "search_java_spring_boot_docs", description = """
             Search internal knowledge base for Java and Spring-related technical information.
 
             Use this tool when the question is about Java, Spring Boot, or backend systems built with them.

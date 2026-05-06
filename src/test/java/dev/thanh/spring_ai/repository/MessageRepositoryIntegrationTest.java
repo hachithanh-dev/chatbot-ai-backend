@@ -51,7 +51,7 @@ class MessageRepositoryIntegrationTest extends AbstractIntegrationTest {
                 .build();
         sessionRepository.save(session);
 
-        // Create 5 messages in chronological order
+        // Create 5 messages with distinct timestamps via UUIDv7 ordering
         for (int i = 1; i <= 5; i++) {
             ChatMessage msg = ChatMessage.builder()
                     .id(UuidCreator.getTimeOrderedEpoch())
@@ -61,9 +61,7 @@ class MessageRepositoryIntegrationTest extends AbstractIntegrationTest {
                     .content("Message content " + i)
                     .model("gemini-2.5-flash")
                     .build();
-            messageRepository.save(msg);
-            // Small sleep to ensure distinct createdAt timestamps
-            try { Thread.sleep(5); } catch (InterruptedException ignored) {}
+            messageRepository.saveAndFlush(msg);
         }
     }
 

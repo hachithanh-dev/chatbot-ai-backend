@@ -69,3 +69,7 @@ security:
 # ── Tắt Semantic Cache — không cần Jedis pool trên CI ──────────────
 semantic-cache:
   enabled: false
+
+# ── Tắt Memory — integration test không có Gemini + Qdrant ─────────
+memory:
+  enabled: false

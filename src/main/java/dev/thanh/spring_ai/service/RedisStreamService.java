@@ -26,7 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -264,8 +263,8 @@ public class RedisStreamService {
             chatMetrics.stopBatchInsertTimer(batchTimer);
 
             List<String> messageIds = records.stream()
-                    .map(record -> record.getId().getValue())
-                    .collect(Collectors.toList());
+                    .map(entry -> entry.getId().getValue())
+                    .toList();
 
             acknowledgeMessages(messageIds);
 
@@ -300,10 +299,10 @@ public class RedisStreamService {
         List<String> dlqIds = new ArrayList<>();
         int insertedCount = 0;
 
-        for (MapRecord<String, Object, Object> record : records) {
-            String messageId = record.getId().getValue();
+        for (MapRecord<String, Object, Object> entry : records) {
+            String messageId = entry.getId().getValue();
             try {
-                ChatMessage message = messageProcessor.transformToChatMessage(record);
+                ChatMessage message = messageProcessor.transformToChatMessage(entry);
                 if (message != null && batchRepository.singleInsert(message)) {
                     insertedCount++;
                 }
@@ -313,7 +312,7 @@ public class RedisStreamService {
                 StreamMessageMetadata metadata = getSpecificMessageMetadata(messageId);
                 if (metadata != null && metadata.getDeliveryCount() >= streamProperties.getMaxRetryAttempts()) {
                     log.warn("Message {} exceeded max retries, moving to DLQ", messageId);
-                    dlqService.sendToDeadLetterQueue(record, singleError);
+                    dlqService.sendToDeadLetterQueue(entry, singleError);
                     dlqIds.add(messageId);
                 }
                 // else: không acknowledge → Redis Stream sẽ tự redeliver

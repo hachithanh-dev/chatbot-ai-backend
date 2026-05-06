@@ -4,7 +4,6 @@ import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.thanh.spring_ai.components.UuidV7Generator;
 import dev.thanh.spring_ai.config.HybridRagProperties;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 
@@ -26,7 +25,6 @@ import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j(topic = "RAG-SERVICE")
 @ConditionalOnProperty(name = "rag.mock.enabled", havingValue = "false", matchIfMissing = true)
 public class RagService implements RagServicePort {
@@ -49,9 +47,29 @@ public class RagService implements RagServicePort {
     private final Executor virtualThreadExecutor;
 
     // ─── Retrieval Beans ──────────────────────────────────────────────────
-    @Qualifier("queryVectorStore")
     private final VectorStore queryVectorStore; // RETRIEVAL_QUERY
     private final RerankService rerankService;
+
+    public RagService(
+            VectorStore documentVectorStore,
+            DocumentSplitter documentSplitter,
+            HybridRagProperties ragProperties,
+            UuidV7Generator uuidGenerator,
+            DocumentParserService documentParserService,
+            Optional<SemanticCacheService> semanticCacheService,
+            Executor virtualThreadExecutor,
+            @Qualifier("queryVectorStore") VectorStore queryVectorStore,
+            RerankService rerankService) {
+        this.documentVectorStore = documentVectorStore;
+        this.documentSplitter = documentSplitter;
+        this.ragProperties = ragProperties;
+        this.uuidGenerator = uuidGenerator;
+        this.documentParserService = documentParserService;
+        this.semanticCacheService = semanticCacheService;
+        this.virtualThreadExecutor = virtualThreadExecutor;
+        this.queryVectorStore = queryVectorStore;
+        this.rerankService = rerankService;
+    }
 
     public void storeDataFile(MultipartFile file) {
 

@@ -1,6 +1,5 @@
 package dev.thanh.spring_ai.config;
 
-import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
@@ -22,8 +21,9 @@ import redis.clients.jedis.ConnectionPoolConfig;
  * KHÔNG ảnh hưởng Lettuce auto-config của Spring Data Redis.
  *
  * <p>
- * {@link AllMiniLmL6V2QuantizedEmbeddingModel} chạy local trên ONNX Runtime,
- * tạo embedding 384-dim trong ~1ms. Không gọi API bên ngoài.
+ * Local embedding model (multilingual-e5-small) được cấu hình tại
+ * {@link LocalEmbeddingConfig} — tạo wrapper bean {@code cacheEmbeddingModel}
+ * với prefix "query: " tự động.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "semantic-cache.enabled", havingValue = "true", matchIfMissing = true)
@@ -77,14 +77,5 @@ public class SemanticCacheConfig {
 
         return jedis;
     }
-
-    /**
-     * Local embedding model — MiniLM-L6-v2 quantized (ONNX).
-     * 384-dim output, ~1ms per embed. Zero API cost.
-     */
-    @Bean
-    public AllMiniLmL6V2QuantizedEmbeddingModel localEmbeddingModel() {
-        log.info("✅ Local embedding model loaded: AllMiniLmL6V2 (384-dim, quantized ONNX)");
-        return new AllMiniLmL6V2QuantizedEmbeddingModel();
-    }
 }
+

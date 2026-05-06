@@ -1,10 +1,10 @@
 # 🤖 AI Chatbot — Backend
 
-> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, **Semantic Cache** (Redis HNSW + local MiniLM embedding), và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
+> **Production-grade Spring Boot backend** cho hệ thống AI Chatbot sử dụng **Agentic RAG** (Retrieval-Augmented Generation) với Google Gemini, vector search (Qdrant), Cohere cross-encoder rerank, **Semantic Cache** (Redis HNSW + multilingual-e5-small local embedding), **Long-Term User Memory** (Qdrant + E5 asymmetric retrieval + cheap LLM extraction), và kiến trúc event-driven qua Redis Streams. Hệ thống được thiết kế với multi-layer resilience, full observability stack, và multi-environment deployment.
 
 [![Java](https://img.shields.io/badge/Java-24-orange?logo=openjdk)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
-[![Spring AI](https://img.shields.io/badge/Spring%20AI-1.1-blue?logo=spring)](https://docs.spring.io/spring-ai/reference/)
+[![Spring AI](https://img.shields.io/badge/Spring%20AI-1.1.4-blue?logo=spring)](https://docs.spring.io/spring-ai/reference/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -25,12 +25,14 @@
                     │  ┌───────────────────────────────────────────────────┐  │
                     │  │              Service Layer                         │  │
                     │  │  Agentic RAG (LLM Tool Calling → Search → Rerank) │  │
+                    │  │  Long-Term Memory (E5 local → Qdrant user facts)  │  │
+                    │  │  Tool Augmentation (innerThought + confidence)     │  │
                     │  │  LLM (Gemini 2.5 Flash + 2-Phase Timeout)        │  │
                     │  │  Resilience (CB + RateLimiter + Bulkhead)         │  │
                     │  │  Redis Streams (Consumer Group + DLQ + Recovery)  │  │
                     │  │  Session Activity (ZSET + Background Sync)        │  │
                     │  │  Rate Limit (Token Bucket + Post-flight Quota)     │  │
-                    │  │  Semantic Cache (Redis HNSW + MiniLM-L6-v2 local) │  │
+                    │  │  Semantic Cache (Redis HNSW + E5 local embedding) │  │
                     │  │  Observability (Micrometer → Prometheus)          │  │
                     │  └────┬──────────┬──────────┬──────────┬────────────┘  │
                     └───────┼──────────┼──────────┼──────────┼──────────────┘
@@ -38,8 +40,9 @@
                        ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
                        │Postgres│ │ Redis  │ │ Qdrant │ │  Gemini  │
                        │  (DB)  │ │(Cache/ │ │(Vector │ │  (LLM)   │
-                       │        │ │Stream/ │ │ Store) │ │          │
-                       │        │ │ ZSET)  │ │        │ │          │
+                       │        │ │Stream/ │ │ Store  │ │  2.5     │
+                       │        │ │ ZSET)  │ │+ User  │ │ Flash +  │
+                       │        │ │        │ │Memory) │ │ Lite)    │
                        └────────┘ └────────┘ └────────┘ └──────────┘
                             ▲          ▲
                        ┌────┴──────────┴────┐
@@ -58,11 +61,14 @@
 |-------|-----------|---------|
 | **Runtime** | Java 24 (Virtual Threads) | High-concurrency async processing |
 | **Framework** | Spring Boot 3.5.8 | Core framework |
-| **AI / LLM** | Spring AI 1.1.0 + Google Gemini 2.5 Flash | Chat streaming & embedding |
+| **AI / LLM** | Spring AI 1.1.4 + Google Gemini 2.5 Flash | Chat streaming & embedding |
+| **Cheap LLM** | Gemini 2.5 Flash Lite | Title generation & memory fact extraction (low cost) |
 | **Embedding** | Gemini Embedding 001 (Matryoshka 768d) | Dual task-type embeddings (RETRIEVAL_DOCUMENT / RETRIEVAL_QUERY) |
 | **Vector DB** | Qdrant 1.13 | Semantic search & RAG retrieval |
 | **Reranking** | Cohere Rerank v3.5 | Cross-encoder reranking (improve RAG quality) |
-| **Local Embedding** | LangChain4j MiniLM-L6-v2-Q (ONNX) | 384-dim local embeddings for semantic cache (~1ms, zero API cost) |
+| **Local Embedding** | LangChain4j multilingual-e5-small (ONNX) | 384-dim, 100+ languages, asymmetric retrieval (query:/passage:), ~2-3ms, zero API cost |
+| **Long-Term Memory** | Qdrant + E5 local + Cheap LLM | Per-user fact extraction, semantic dedup, agentic recall via tool calling |
+| **Tool Augmentation** | AugmentedToolCallbackProvider | Reasoning logger — LLM trả về innerThought + confidence mỗi tool call |
 | **Database** | PostgreSQL 16 | Persistent storage (Flyway migrations) |
 | **Cache/Stream** | Redis 8 (RediSearch) | Caching, Streams, ZSET session tracking, Lua rate limiting, HNSW vector search |
 | **Migration** | Flyway | Database schema versioning (table + index migrations) |
@@ -87,7 +93,8 @@
 ### 🧠 Agentic RAG Pipeline
 
 - **Agentic approach**: LLM (Gemini) tự quyết định khi nào cần tra cứu knowledge base thông qua **Tool Calling** — thay vì naive RAG (mọi câu hỏi đều qua Qdrant)
-- **Semantic Cache layer** (inside tool): Redis HNSW + MiniLM-L6-v2 local embedding (384-dim, ~1ms). Chỉ trigger khi LLM gọi tool → cache hit → ~10ms thay vì ~2-5s (skip Qdrant + Cohere hoàn toàn). Câu hỏi không cần tool → bypass cache hoàn toàn
+- **AugmentedToolCallbackProvider**: Wrap tất cả tools với reasoning logger — LLM trả về `innerThought` + `confidence` mỗi lần gọi tool, giúp debug và audit quyết định
+- **Semantic Cache layer** (inside tool): Redis HNSW + multilingual-e5-small local embedding (384-dim, ~2-3ms). Chỉ trigger khi LLM gọi tool → cache hit → ~10ms thay vì ~2-5s (skip Qdrant + Cohere hoàn toàn). Câu hỏi không cần tool → bypass cache hoàn toàn
 - **3-stage retrieval** (khi cache miss + tool được gọi): Vector Search (Qdrant) → Cross-Encoder Rerank (Cohere) → Context Assembly
 - **Event-driven cache invalidation**: Upload tài liệu mới → tự động evict toàn bộ semantic cache (FT.DROPINDEX DD + re-create)
 - **Tool resilience**: Timeout 10s + graceful fallback — nếu Qdrant down/chậm, LLM vẫn trả lời bằng general knowledge. Cache failure cũng fail-open
@@ -95,6 +102,20 @@
 - **Matryoshka embedding**: `gemini-embedding-001` giảm từ 3072d → 768d, tiết kiệm 4x RAM Qdrant với ~95% chất lượng retrieval
 - **Smart document parser**: PDF → page-level reader (PagePdfDocumentReader), non-PDF → Apache Tika auto-detect
 - **Configurable pipeline**: chunk size, overlap, candidate topK, rerank topK, similarity threshold — tất cả qua `application.yaml`
+- **Dual ChatClient**: Primary (main chat + tools) và Cheap (`gemini-2.5-flash-lite` cho title generation + memory extraction)
+
+### 🧠 Long-Term User Memory
+
+- **Automatic fact extraction**: `MemoryRetentionAdvisor` (StreamAdvisor) trigger extraction sau khi stream kết thúc — zero latency impact
+- **Cheap LLM extraction**: `MemoryExtractionService` dùng `gemini-2.5-flash-lite` để trích xuất facts (identity, education, career, tech stack, projects, goals) — tiết kiệm chi phí
+- **Semantic deduplication** (search-before-write): Embed fact → search existing memories (cùng userId) → 3 nhánh:
+  - `score ≥ 0.98` → Skip (duplicate hoàn toàn, chỉ touch timestamp)
+  - `score ≥ 0.92` → Update content nếu fact mới dài hơn (richer info)
+  - `score < 0.92` → Insert point mới
+- **Agentic recall**: `MemoryTools.recall_memories` — LLM tự quyết định khi nào cần recall user context từ past sessions
+- **Asymmetric retrieval**: multilingual-e5-small với prefix wrappers — `query:` cho search, `passage:` cho store
+- **Separate Qdrant collection**: `user-memories` (384-dim, Cosine) — tách hoàn toàn khỏi RAG collection `spring` (768-dim)
+- **Fail-open**: Memory failure KHÔNG bao giờ ảnh hưởng đến chat pipeline chính
 
 ### 💬 Chat Streaming
 
@@ -226,7 +247,25 @@ openssl rsa -in src/main/resources/keys/private.pem -pubout -out src/main/resour
 
 > 🔒 Thư mục `keys/` đã có trong `.gitignore` — key KHÔNG được commit lên Git.
 
-### 3. Start Infrastructure (Dev Mode)
+### 📥 3. Download E5 Embedding Model
+
+Hệ thống cần ONNX model **multilingual-e5-small** cho Semantic Cache và Long-Term Memory. File `.onnx` quá lớn nên không commit vào Git.
+
+```bash
+# Tạo thư mục model
+mkdir -p src/main/resources/models/multilingual-e5-small
+
+# Download model (quantized ~67MB) và tokenizer (~700KB) từ Hugging Face
+curl -L -o src/main/resources/models/multilingual-e5-small/model_quantized.onnx \
+  "https://huggingface.co/nickmuchi/quantized-e5-small-multilingual/resolve/main/model_quantized.onnx"
+
+curl -L -o src/main/resources/models/multilingual-e5-small/tokenizer.json \
+  "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/tokenizer.json"
+```
+
+> 🔒 Thư mục `models/` và `*.onnx` đã có trong `.gitignore` — KHÔNG được commit lên Git.
+
+### 4. Start Infrastructure (Dev Mode)
 
 ```bash
 # Option 1: Sử dụng run script (Windows)
@@ -243,7 +282,7 @@ Services khởi động:
 - **Prometheus** — `localhost:9090`
 - **Grafana** — `localhost:3001` (admin/admin)
 
-### 4. Run the Application
+### 5. Run the Application
 
 ```bash
 # Sử dụng Maven Wrapper (khuyến nghị)
@@ -255,7 +294,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 Ứng dụng sẽ khởi động tại **http://localhost:8080**.
 
-### 5. Verify
+### 6. Verify
 
 ```bash
 # Health check
@@ -301,6 +340,8 @@ curl http://localhost:8080/actuator/bulkheads
 | `GF_ADMIN_USER` | Grafana admin username | `admin` |
 | `GF_ADMIN_PASSWORD` | Grafana admin password | `admin` |
 | `ADMIN_EMAILS` | Comma-separated admin emails (auto-seed on startup) | `admin@example.com` |
+| `EMBEDDING_LOCAL_MODEL_PATH` | E5 ONNX model path (Docker volume) | `/app/models/multilingual-e5-small/model_quantized.onnx` |
+| `EMBEDDING_LOCAL_TOKENIZER_PATH` | E5 tokenizer path (Docker volume) | `/app/models/multilingual-e5-small/tokenizer.json` |
 
 ---
 
@@ -318,7 +359,8 @@ chatbot-ai-backend/
 │   │   │   ├── CustomJwtDecoder.java      # JWT token validation
 │   │   │   ├── JwtEncoderConfig.java      # RSA key pair encoder
 │   │   │   └── ...
-│   │   ├── AiConfig.java                  # ChatClient bean
+│   │   ├── AiConfig.java                  # ChatClient + AugmentedToolCallbackProvider + cheapChatClient
+│   │   ├── LocalEmbeddingConfig.java      # E5 ONNX model loading + prefix wrappers
 │   │   ├── EmbeddingConfig.java           # Dual embedding models (Document/Query)
 │   │   ├── VectorStoreConfig.java         # Dual Qdrant VectorStores
 │   │   ├── DocumentSplitterConfig.java    # LangChain4j recursive splitter
@@ -326,8 +368,9 @@ chatbot-ai-backend/
 │   │   ├── RedisConfig.java               # Redis + Lettuce pool
 │   │   ├── RedisStreamProperties.java     # Stream consumer config
 │   │   ├── RateLimitProperties.java       # Token bucket + daily quota config
-│   │   ├── SemanticCacheConfig.java       # Jedis pool + local embedding model beans
+│   │   ├── SemanticCacheConfig.java       # Jedis pool for semantic cache
 │   │   ├── SemanticCacheProperties.java   # HNSW tuning + cache behavior config
+│   │   ├── MemoryProperties.java          # Long-term memory config (thresholds, topK)
 │   │   ├── CohereConfig.java             # Cohere Rerank client
 │   │   ├── VirtualThreadConfig.java       # Virtual thread executor
 │   │   ├── LazyDataSourceConfig.java      # Defer DB connection (BeanPostProcessor)
@@ -405,6 +448,8 @@ chatbot-ai-backend/
 │   │   ├── AdminDocumentService.java      # Document management
 │   │   ├── AdminCrawlerService.java       # Crawler admin operations
 │   │   ├── JobRegistryService.java        # Scheduled job registry
+│   │   ├── UserMemoryService.java         # Long-term memory (Qdrant user-memories)
+│   │   ├── MemoryExtractionService.java   # Cheap LLM fact extraction (async)
 │   │   ├── LlmServicePort.java           # LLM interface (for mock injection)
 │   │   └── RagServicePort.java           # RAG interface (for mock injection)
 │   ├── test/                              # In-app test infrastructure
@@ -412,8 +457,12 @@ chatbot-ai-backend/
 │   │   ├── MockRagService.java            # RAG mock for load testing
 │   │   ├── LoadTestController.java        # Load test auth bypass endpoint
 │   │   └── LoadTestSecurityConfig.java    # Security config for load test profile
+│   ├── advisor/                           # Spring AI Advisors
+│   │   └── MemoryRetentionAdvisor.java    # StreamAdvisor → trigger memory extraction
 │   ├── tools/                             # AI function calling tools
-│   │   └── JavaKnowledgeTools.java        # Agentic RAG tool (LLM-driven search)
+│   │   ├── JavaKnowledgeTools.java        # Agentic RAG tool (LLM-driven search)
+│   │   ├── MemoryTools.java              # recall_memories tool (user context recall)
+│   │   └── AgentThinking.java            # Augmented reasoning schema (innerThought + confidence)
 │   └── utils/                             # Utility classes
 │       ├── SafeRedisExecutor.java         # Centralized Redis CB wrapper
 │       └── SecurityUtils.java             # Auth context helpers
@@ -509,32 +558,17 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --
 | Redis Exporter | `9121` | Internal only | — |
 | PG Exporter | `9187` | Internal only | — |
 
-### Production PostgreSQL Tuning
+### Production Tuning & Resource Limits
 
-```
-shared_buffers=512MB    effective_cache_size=1536MB    work_mem=8MB
-maintenance_work_mem=256MB    wal_buffers=16MB    max_wal_size=1GB
-checkpoint_completion_target=0.9    random_page_cost=1.1
-jit=off    log_min_duration_statement=250ms
-```
+> 📋 Chi tiết PostgreSQL tuning, Redis tuning, và resource limits (CPU/RAM) cho từng service — xem trực tiếp trong [`docker-compose.prod.yml`](docker-compose.prod.yml).
 
-### Production Redis Tuning
+| Service | Prod RAM | Key Config |
+|---------|----------|------------|
+| Spring Boot | 1024 MB | E5 model ~50MB RAM thêm |
+| PostgreSQL | 2048 MB | `shared_buffers=512MB`, `jit=off` |
+| Redis | 1024 MB | `maxmemory=768mb`, `allkeys-lru` |
+| Qdrant | 1024 MB | RAG collection + User Memory collection |
 
-```
-maxmemory 768mb    maxmemory-policy allkeys-lru    appendonly yes
-appendfsync everysec    tcp-backlog 1024    hz 50
-```
-
-### Resource Limits
-
-| Service | Dev (CPU/RAM) | Prod (CPU/RAM) |
-|---------|---------------|----------------|
-| Spring Boot | IDE | 1.0 core / 1024 MB |
-| PostgreSQL | 0.25 / 256 MB | 1.0 core / 2048 MB |
-| Redis | 0.50 / 768 MB | 0.50 / 1024 MB |
-| Qdrant | 0.25 / 256 MB | 1.0 core / 1024 MB |
-| Prometheus | 0.25 / 256 MB | 0.50 / 512 MB |
-| Grafana | 0.25 / 256 MB | 0.50 / 512 MB |
 
 ---
 
@@ -698,6 +732,10 @@ Dự án sử dụng **GitHub Actions** với pipeline 6 stages:
 | **BeanPostProcessor** | Wrap HikariDataSource transparently without overriding auto-config |
 | **Agentic Tool Calling** | LLM decides when to invoke RAG search via function calling (vs naive "always search") |
 | **Dual Embedding** | Separate `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task-type embeddings for optimal retrieval |
+| **StreamAdvisor (Reactive Hook)** | `MemoryRetentionAdvisor` — doFinally trigger memory extraction sau stream kết thúc |
+| **Search-Before-Write (Semantic Dedup)** | `UserMemoryService` — embed fact → search similar → skip/update/insert |
+| **AugmentedToolCallbackProvider** | Wrap all tools với reasoning schema (innerThought + confidence) cho observability |
+| **Dual ChatClient** | Primary (main chat + tools) + Cheap (`flash-lite` cho title + memory extraction) |
 
 ---
 
@@ -717,10 +755,13 @@ Client (SSE Request)
 │        │                                                         │
 │        ├── KHÔNG cần tool → LLM trả lời bằng general knowledge  │
 │        │                                                         │
-│        └── CẦN tool → gọi searchJavaSpringBootDocs()            │
+│        ├── CẦN recall → gọi recall_memories()                   │
+│        │   └── E5 embed query → Qdrant user-memories → facts     │
+│        │                                                         │
+│        └── CẦN RAG → gọi search_java_spring_boot_docs()         │
 │            │                                                     │
 │            ├── 2a. Semantic Cache Lookup (inside tool)           │
-│            │   ├── MiniLM-L6-v2 embed query (~1ms)              │
+│            │   ├── E5 embed query (~2-3ms, local ONNX)           │
 │            │   └── Redis HNSW FT.SEARCH                         │
 │            │       ├── HIT → return cached (~10ms) ← skip RAG  │
 │            │       └── MISS → continue ▼                        │
@@ -742,36 +783,32 @@ Client (SSE Request)
 │    ├── Stream Consumer Group → batch INSERT PostgreSQL           │
 │    ├── Session Sync Scheduler → ZPOPMIN dirty → batch UPDATE DB │
 │    └── Pending Recovery → XCLAIM stale messages → retry          │
+├─────────────────────────────────────────────────────────────────┤
+│ 5. Memory Pipeline (async, post-stream via MemoryRetentionAdvisor)│
+│    ├── MemoryExtractionService → cheap LLM (flash-lite)          │
+│    │   └── Extract facts: identity, career, tech stack, goals    │
+│    └── UserMemoryService → semantic dedup → upsert Qdrant        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 > **Lưu ý**: Semantic Cache nằm **bên trong tool** (`JavaKnowledgeTools`), KHÔNG phải bước riêng trước LLM.
 > Nếu câu hỏi không cần tool (casual, non-Java), LLM trả lời trực tiếp — hoàn toàn bypass RAG + cache.
+> Memory extraction chạy **async** sau khi stream kết thúc — zero latency impact.
 
 ---
 
 ## ⚡ Performance Benchmarks
 
-> Đầy đủ chi tiết xem tại [`benchmark/README.md`](benchmark/README.md)
+> Đầy đủ chi tiết và key findings xem tại [`benchmark/README.md`](benchmark/README.md)
 
 | Metric | Value | Condition |
 |--------|-------|-----------|
 | **Throughput** | ~390 rps | 2,000 VU, Mock LLM |
-| **Latency p50** | 2.09s | Mock LLM (TTFB 300-2000ms) |
 | **Semantic Cache hit** | ~10ms | vs ~2-5s full RAG pipeline |
-| **Local embedding** | ~1ms | MiniLM-L6-v2 ONNX, 384-dim |
+| **Local embedding** | ~2-3ms | multilingual-e5-small ONNX, 384-dim |
 | **Saturation point** | ~2,800 VU | k6 tách máy, single instance |
 | **Capacity estimate** | ~10,000 users online | single instance, think-time 60s |
-| **System CPU** | 78.3% | @ 2,000 VU (k6 tách máy) |
-| **HikariCP pending** | 0 | with Bulkhead protection |
-| **CB state** | CLOSED ✅ | @ 2,000 VU (k6 tách máy) |
 
-### Key Findings
-
-- **Bulkhead** bảo vệ DB pool hoàn hảo: HikariCP pending = 0, timeout = 0
-- **4-Tier Priority** hoạt động đúng: 0 message loss, non-critical rejected gracefully
-- **k6 cùng máy** tranh ~20% CPU → tách ra tăng capacity **+55%**
-- **Recovery tự động** ~30s khi load giảm (CB HALF_OPEN → CLOSED)
 
 ---
 

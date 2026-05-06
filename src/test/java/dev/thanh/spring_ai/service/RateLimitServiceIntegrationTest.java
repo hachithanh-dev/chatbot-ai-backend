@@ -72,7 +72,7 @@ class RateLimitServiceIntegrationTest extends dev.thanh.spring_ai.config.Abstrac
                 .satisfies(ex -> {
                     RateLimitException rle = (RateLimitException) ex;
                     assertThat(rle.getErrorCode()).isEqualTo(RateLimitErrorCode.TOO_MANY_REQUESTS);
-                    assertThat(rle.getRetryAfterSeconds()).isGreaterThan(0);
+                    assertThat(rle.getRetryAfterSeconds()).isPositive();
                 });
     }
 
@@ -133,7 +133,7 @@ class RateLimitServiceIntegrationTest extends dev.thanh.spring_ai.config.Abstrac
         // Verify TTL is set and is approximately 25 hours (25 * 3600 = 90000 seconds)
         Long ttl = redisTemplate.getExpire(keys.iterator().next());
         assertThat(ttl).isNotNull()
-                .isGreaterThan(0L)
+                .isPositive()
                 .isLessThanOrEqualTo(25L * 3600);
     }
 }

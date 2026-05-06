@@ -16,7 +16,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -59,7 +64,7 @@ public class SessionActivityService {
      * round-trip.
      */
     public void touchSession(String userId, String sessionId) {
-        double score = (double) System.currentTimeMillis();
+        double score = System.currentTimeMillis();
         String userKey = buildUserKey(userId);
 
         safeRedis.tryExecute(
@@ -177,7 +182,7 @@ public class SessionActivityService {
         return safeRedis.executeOrReject(
                 () -> {
                     Set<ZSetOperations.TypedTuple<Object>> tuples = redisTemplate.opsForZSet()
-                            .reverseRangeWithScores(userKey, 0, limit - 1);
+                            .reverseRangeWithScores(userKey, 0, (long) limit - 1);
 
                     if (tuples == null || tuples.isEmpty()) {
                         return Collections.<String>emptyList();

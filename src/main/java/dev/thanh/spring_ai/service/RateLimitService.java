@@ -171,10 +171,10 @@ public class RateLimitService {
     // ─────────────────────────────────────────────────────────────────────────
 
     private long toLong(Object val) {
-        if (val instanceof Number)
-            return ((Number) val).longValue();
-        if (val instanceof String)
-            return Long.parseLong((String) val);
+        if (val instanceof Number number)
+            return number.longValue();
+        if (val instanceof String string)
+            return Long.parseLong(string);
         return 0L;
     }
 }
