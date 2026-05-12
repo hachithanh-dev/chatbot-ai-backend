@@ -317,3 +317,20 @@ jobs:
           docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:${{ github.sha }}
           docker push ${{ secrets.DOCKER_USERNAME }}/spring-ai:latest
 
+  # ═══════════════════════════════════════════════════════════════
+  # Stage 7: Deploy to VPS (after Docker push succeeds)
+  # SSH into VPS → pull latest image → restart container
+  # ═══════════════════════════════════════════════════════════════
+  deploy:
+    name: 🏗️ Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: [docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: ~/chatbot-ai/deploy.sh backend
